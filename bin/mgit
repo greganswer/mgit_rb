@@ -2,10 +2,12 @@
 
 require "thor"
 require "launchy"
+require 'fileutils' # https://www.rubyguides.com/2015/05/working-with-files-ruby/
 
 require_relative '../lib/git'
 require_relative '../lib/issue'
 
+# TODO: Ensure all commands are run from the project root directory.
 class MgitCLI < Thor
   class_option :force, type: :boolean, aliases: "-f", desc: 'Assume "yes" as answer to all prompts and run non-interactively'
   class_option :debug, type: :boolean, desc: 'Enable debug mode'
@@ -33,20 +35,20 @@ class MgitCLI < Thor
       skip("Branch not created")
     end
   rescue StandardError => e # TODO: Specify error types
-    fail e.to_s.split("\n")[0]
+    fail options.debug? ? e : e.to_s.split("\n")[0] # TODO: Extract method
   end 
 
   # Commit command
 
   desc "commit", "Create a commit and push to GitHub"
   long_desc <<-LONGDESC
-  All of the un-staged files are added, committed and pushed to GitHub.
-  \x5The commit message is extracted from the branch name if one is not supplied
-  \x5using the --message option. This command does the following:
-  \x5
-  \x5  - Add all file (if commit was created)
-  \x5  - Commit the changes (if commit was created)
-  \x5  - Push changes to remote (if commit was created)
+    All of the un-staged files are added, committed and pushed to GitHub.
+    \x5The commit message is extracted from the branch name if one is not supplied
+    \x5using the --message option. This command does the following:
+    \x5
+    \x5  - Add all file (if commit was created)
+    \x5  - Commit the changes (if commit was created)
+    \x5  - Push changes to remote (if commit was created)
   LONGDESC
   method_option :message, desc: "the commit message"
   method_option :issue_id, desc: "the ID of the issue being worked on"
@@ -54,38 +56,76 @@ class MgitCLI < Thor
     current_branch, stderr, status = Git.current_branch()
     raise stderr unless status.success?
 
-    # TODO: ask for confirmation
-
+    # Set commit message.
+    # TODO: Extract method
     message = options[:message]
-    if !message && options[:issue_id]
-        message = Issue.from_tracker(options[:issue_id]).to_s
-    elsif !message
-      message = Issue.from_branch(current_branch).to_s
+    unless message
+      issue = options[:issue_id] ? Issue.from_tracker(options[:issue_id]) : Issue.from_branch(current_branch)
+      message = issue.to_s
     end
     
-    Git.commit_all(message) # TODO: Handle errors, same as Git.current_branch()
-    Git.push(current_branch)
+    # Ask to create commit.
+    # TODO: Extract method
+    say("The commit message will be \"#{set_color(message, :cyan)}\"") if message
+    prompt = "Commit all changes to the #{set_color(current_branch, :cyan)} branch?"
+    if options.force? || yes?(prompt)
+      Git.commit_all(message) # TODO: Handle errors, same as Git.current_branch()
+      Git.push(current_branch) # TODO: Handle errors, same as Git.current_branch()
+      done
+    else
+      skip("Changes not committed")
+    end
   rescue StandardError => e # TODO: Specify error types
-    fail options.debug? ? e : e.to_s.split("\n")[0]
+    fail options.debug? ? e : e.to_s.split("\n")[0] # TODO: Extract method
   end
 
   # Init command
 
   desc "init", "Initialize local repository and push to remote"
   long_desc <<-LONGDESC
-  This command is idempotent and it will prompt you before commiting changes and
-  \x5pushing them to the remote repo. This command does the following:
-  \x5
-  \x5  - Create .gitignore file (if not already created)
-  \x5  - Initialize a git repo (if not already intialized)
-  \x5  - Asks to create an initial commit
-  \x5  - Add all file (if user confirmed commit)
-  \x5  - Commit the changes (if user confirmed commit)
-  \x5  - Push changes to remote (if user confirmed commit)
+    This command is idempotent and it will prompt you before commiting changes and
+    \x5pushing them to the remote repo. This command does the following:
+    \x5
+    \x5  - Create .gitignore file (if not already created)
+    \x5  - Initialize a git repo (if not already intialized)
+    \x5  - Asks to create an initial commit
+    \x5  - Add all file (if user confirmed commit)
+    \x5  - Commit the changes (if user confirmed commit)
+    \x5  - Push changes to remote (if user confirmed commit)
   LONGDESC
   def init
+    # Create .gitignore file.
+    say("Creating .gitignore file...")
+    if File.exists?(".gitignore")
+      skip(".gitignore file already exists")
+    else
+      FileUtils.touch('.gitignore')
+      done
+    end
+
+    # Initialize a git repo.
+    say("Creating .gitignore file...")
+    if Git.initialized?
+		  skip("Repo already intialized")
+    else
+      Git.init
+      done
+    end
+
+    # Ask to create commit.
+    # TODO: Extract method
+    message = "Initial commit"
+    say("The commit message will be \"#{set_color(message, :cyan)}\"") if message
+    prompt = "Commit all changes to the #{set_color(current_branch, :cyan)} branch?"
+    if options.force? || yes?(prompt)
+      Git.commit_all(message) # TODO: Handle errors, same as Git.current_branch()
+      Git.push(current_branch) # TODO: Handle errors, same as Git.current_branch()
+      done
+    else
+      skip("Changes not committed")
+    end
   rescue StandardError => e # TODO: Specify error types
-    fail e.to_s.split("\n")[0]
+    fail options.debug? ? e : e.to_s.split("\n")[0] # TODO: Extract method
   end
 
   # Open command
@@ -94,14 +134,10 @@ class MgitCLI < Thor
   def open
     say("Opening issue...")
     stdout, stderr, status = Git.current_branch()
-    if status.success?
-      issue = Issue.from_branch(stdout)
-    else
-      fail stderr.split("\n")[0]
-    end
-    Launchy.open(issue.web_url)
+    raise stderr unless status.success?
+    Launchy.open(Issue.from_branch(stdout).web_url)
   rescue StandardError => e # TODO: Specify error types
-    fail e.to_s.split("\n")[0]
+    fail options.debug? ? e : e.to_s.split("\n")[0] # TODO: Extract method
   end
 
   # Pull request command
@@ -109,22 +145,57 @@ class MgitCLI < Thor
   # TODO: Add pull_request alias for command
   desc "pr", "Create a GitHub Pull Request for the specified branch"
   long_desc <<-LONGDESC
-  This command is idempotent and it will prompt you before commiting changes and
-  \x5pushing them to the remote repo. This command does the following:
-  \x5
-  \x5  - Asks to create a commit
-  \x5  - Add all file (if user confirmed commit)
-  \x5  - Commit the changes (if user confirmed commit)
-  \x5  - Rebase changes off base branch (if user confirms rebase)
-  \x5  - Push changes to remote 
-  \x5  - Create the pull request on GitHub
+    This command is idempotent and it will prompt you before commiting changes and
+    \x5pushing them to the remote repo. This command does the following:
+    \x5
+    \x5  - Asks to create a commit
+    \x5  - Add all file (if user confirmed commit)
+    \x5  - Commit the changes (if user confirmed commit)
+    \x5  - Rebase changes off base branch (if user confirms rebase)
+    \x5  - Push changes to remote 
+    \x5  - Create the pull request on GitHub
   LONGDESC
   method_option :base_branch, desc: "the base branch to perform this action on"
   method_option :message, desc: "the commit message"
   def pr
+    current_branch, stderr, status = Git.current_branch()
+    raise stderr unless status.success?
+
+    # Set commit message.
+    # TODO: Extract method
+    message = options[:message]
+    unless message
+      issue = options[:issue_id] ? Issue.from_tracker(options[:issue_id]) : Issue.from_branch(current_branch)
+      message = issue.to_s
+    end
+    
+    # Ask to create commit.
+    # TODO: Extract method
+    say("The commit message will be \"#{set_color(message, :cyan)}\"") if message
+    prompt = "Commit all changes to the #{set_color(current_branch, :cyan)} branch?"
+    if options.force? || yes?(prompt)
+      Git.commit_all(message) # TODO: Handle errors, same as Git.current_branch()
+      Git.push(current_branch) # TODO: Handle errors, same as Git.current_branch()
+      done
+    else
+      skip("Changes not committed")
+    end
+
+	  # Rebase changes on base branch.
     base_branch = options[:base_branch] || Git.default_base_branch
+    prompt = "Update the #{set_color(base_branch, :cyan)} branch and rebase?"
+    if options.force? || yes?(prompt)
+    else
+      skip("No rebase off #{set_color(base_branch, :cyan)}")
+    end
+
+    Git.push(current_branch) # TODO: Handle errors, same as Git.current_branch()
+
+	  # Create pull request.
+    say("Opening pull request...")
+    Git.pull_request(issue: issue)
   rescue StandardError => e # TODO: Specify error types
-    fail e.to_s.split("\n")[0]
+    fail options.debug? ? e : e.to_s.split("\n")[0] # TODO: Extract method
   end
 
   private 
