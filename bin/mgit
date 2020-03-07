@@ -181,7 +181,7 @@ class MgitCLI < Thor
     if Git.initialized?
       skip('Repo already intialized')
     else
-      Git.init
+      Git.initialize_repo
       done
     end
   end

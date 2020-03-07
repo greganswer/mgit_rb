@@ -5,7 +5,6 @@ require 'open3'
 
 # Git contains functions that execute git commands.
 module Git
-  # Check if the branch exists in the current Git repo.
   def self.branch_exists(name)
     _, _, status = Open3.capture3('git', 'rev-parse', '--quiet', '--verify', name.to_s)
     status.success?
@@ -16,7 +15,6 @@ module Git
     puts 'TODO: Implement Git.create_branch'
   end
 
-  # Get the current branch name or raise an error.
   def self.current_branch
     stdout, stderr, status = Open3.capture3('git', 'rev-parse', '--abbrev-ref', 'HEAD')
     raise stderr unless status.success?
@@ -37,8 +35,7 @@ module Git
     raise "Could not find any of the following base branches: #{branches}"
   end
 
-  # Initialize a git repository.
-  def self.init
+  def self.initialize_repo
     _, stderr, status = Open3.capture3('git', 'init')
     raise stderr unless status.success?
   end
