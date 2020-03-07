@@ -31,20 +31,10 @@ class MgitCLI < Thor
   LONGDESC
   method_option :base_branch, desc: 'the base branch to perform this action on'
   def branch(issue_id)
-    base_branch = options[:base_branch] || Git.default_base_branch
     issue = Issue.from_tracker(issue_id)
-
-    # TODO: Extract private method: create_branch(name, base_branch)
-    prompt = "Create #{emphasize(issue.branch_name)} branch from #{emphasize(base_branch)}?"
-    if options.force? || yes?(prompt)
-      Git.create_branch(base_branch, issue.branch_name) # TODO: Handle errors, same as Git.current_branch()
-      done
-    else
-      skip('Branch not created')
-    end
-  rescue StandardError => e # TODO: Specify error types
-    # TODO: Extract private method: fail_with_error(e)
-    fail options.debug? ? e : e.to_s.split("\n")[0]
+    create_branch(issue.branch_name, base_branch)
+  rescue StandardError => e
+    fail_with_error(e)
   end
 
   # Commit command
@@ -62,35 +52,11 @@ class MgitCLI < Thor
   method_option :message, desc: 'the commit message'
   method_option :issue_id, desc: 'the ID of the issue being worked on'
   def commit
-    current_branch, stderr, status = Git.current_branch()
-    raise stderr unless status.success?
-
-    # Set commit message.
-    message = options[:message]
-    unless message
-      # TODO: Extract private method: issue = get_issue(current_branch)
-      issue = if options[:issue_id]
-                Issue.from_tracker(options[:issue_id])
-              else
-                Issue.from_branch(current_branch)
-              end
-      message = issue.to_s
-    end
-
-    # Ask to create commit.
-    # TODO: Extract private method: create_commit(message, current_branch)
-    say(%(The commit message will be "#{emphasize(message)}")) if message
-    prompt = "Commit all changes to the #{emphasize(current_branch)} branch?"
-    if options.force? || yes?(prompt)
-      Git.commit_all(message) # TODO: Handle errors, same as Git.current_branch()
-      Git.push(current_branch) # TODO: Handle errors, same as Git.current_branch()
-      done
-    else
-      skip('Changes not committed')
-    end
-  rescue StandardError => e # TODO: Specify error types
-    # TODO: Extract private method: fail_with_error(e)
-    fail options.debug? ? e : e.to_s.split("\n")[0]
+    message = options[:message] || get_issue_by_id_or_current_branch(options[:issue_id]).to_s
+    commit_all(message)
+    push_changes(Git.current_branch)
+  rescue StandardError => e
+    fail_with_error(e)
   end
 
   # Init command
@@ -108,39 +74,12 @@ class MgitCLI < Thor
       - Push changes to remote (if user confirmed commit)
   LONGDESC
   def init
-    # Create .gitignore file.
-    say('Creating .gitignore file...')
-    if File.exist?('.gitignore')
-      skip('.gitignore file already exists')
-    else
-      FileUtils.touch('.gitignore')
-      done
-    end
-
-    # Initialize a git repo.
-    say('Creating .gitignore file...')
-    if Git.initialized?
-      skip('Repo already intialized')
-    else
-      Git.init
-      done
-    end
-
-    # Ask to create commit.
-    # TODO: Extract private method: create_commit(message, current_branch)
-    message = 'Initial commit'
-    say(%(The commit message will be "#{emphasize(message)}")) if message
-    prompt = "Commit all changes to the #{emphasize(current_branch)} branch?"
-    if options.force? || yes?(prompt)
-      Git.commit_all(message) # TODO: Handle errors, same as Git.current_branch()
-      Git.push(current_branch) # TODO: Handle errors, same as Git.current_branch()
-      done
-    else
-      skip('Changes not committed')
-    end
-  rescue StandardError => e # TODO: Specify error types
-    # TODO: Extract private method: fail_with_error(e)
-    fail options.debug? ? e : e.to_s.split("\n")[0]
+    create_gitignore_file
+    initialise_git_repo
+    commit_all('Initial commit')
+    push_changes('master')
+  rescue StandardError => e
+    fail_with_error(e)
   end
 
   # Open command
@@ -148,18 +87,13 @@ class MgitCLI < Thor
   desc 'open', 'Open an issue in the default web browser'
   def open
     say('Opening issue...')
-    stdout, stderr, status = Git.current_branch
-    raise stderr unless status.success?
-
-    Launchy.open(Issue.from_branch(stdout).web_url)
-  rescue StandardError => e # TODO: Specify error types
-    # TODO: Extract private method: fail_with_error(e)
-    fail options.debug? ? e : e.to_s.split("\n")[0]
+    Launchy.open(Issue.from_branch(Git.current_branch).web_url)
+  rescue StandardError => e
+    fail_with_error(e)
   end
 
   # Pull request command
 
-  # TODO: Add pull_request alias for command
   desc 'pr', 'Create a GitHub Pull Request for the specified branch'
   long_desc <<~LONGDESC
     This command is idempotent and it will prompt you before commiting changes and
@@ -175,57 +109,36 @@ class MgitCLI < Thor
   method_option :base_branch, desc: 'the base branch to perform this action on'
   method_option :message, desc: 'the commit message'
   def pr
-    current_branch, stderr, status = Git.current_branch()
-    raise stderr unless status.success?
+    issue = get_issue_by_id_or_current_branch(options[:issue_id])
+    message = options[:message] || issue.to_s
 
-    # Set commit message.
-    message = options[:message]
-    unless message
-      # TODO: Extract private method: issue = get_issue(current_branch)
-      issue = if options[:issue_id]
-                Issue.from_tracker(options[:issue_id])
-              else
-                Issue.from_branch(current_branch)
-              end
-      message = issue.to_s
-    end
+    commit_all(message)
+    rebase_changes(base_branch)
+    push_changes(Git.current_branch)
 
-    # Ask to create commit.
-    # TODO: Extract private method: create_commit(message, current_branch)
-    say(%(The commit message will be "#{emphasize(message)}")) if message
-    prompt = "Commit all changes to the #{emphasize(current_branch)} branch?"
-    if options.force? || yes?(prompt)
-      Git.commit_all(message) # TODO: Handle errors, same as Git.current_branch()
-      Git.push(current_branch) # TODO: Handle errors, same as Git.current_branch()
-      done
-    else
-      skip('Changes not committed')
-    end
-
-    # Rebase changes on base branch.
-    base_branch = options[:base_branch] || Git.default_base_branch
-    prompt = "Update the #{emphasize(base_branch)} branch and rebase?"
-    if options.force? || yes?(prompt)
-    else
-      skip("No rebase off #{emphasize(base_branch)}")
-    end
-
-    Git.push(current_branch) # TODO: Handle errors, same as Git.current_branch()
-
-    # Create pull request.
     say('Opening pull request...')
     Git.pull_request(issue: issue)
-  rescue StandardError => e # TODO: Specify error types
-    # TODO: Extract private method: fail_with_error(e)
-    fail options.debug? ? e : e.to_s.split("\n")[0]
+  rescue StandardError => e
+    fail_with_error(e)
   end
 
   private
 
-  # TODO: Remove when commands are fully implemented.
-  def todo(name)
-    say('TODO: ', :yellow)
-    say("Implement #{name}")
+  # Display methods
+
+  def skip(message)
+    say('SKIP: ', :yellow)
+    say(message)
+    say('')
+  end
+
+  def done
+    say('OK', %i[green bold])
+    say('')
+  end
+
+  def emphasize(message)
+    set_color(message, :cyan)
   end
 
   def fail(message)
@@ -234,17 +147,80 @@ class MgitCLI < Thor
     exit 1
   end
 
-  def skip(message)
-    say('SKIP: ', :yellow)
-    say(message)
+  def fail_with_error(err)
+    raise err if options.debug?
+
+    fail err.to_s.split("\n")[0]
   end
 
-  def done
-    say('OK', %i[green bold])
+  # Issue methods
+
+  # NOTE: This may make an HTTP request (which can be slow).
+  def get_issue_by_id_or_current_branch(id)
+    id ? Issue.from_tracker(id) : Issue.from_branch(Git.current_branch)
   end
 
-  def emphasize(message)
-    set_color(message, :cyan)
+  # Git methods
+
+  def base_branch
+    options[:base_branch] || Git.default_base_branch
+  end
+
+  def create_gitignore_file
+    say('Creating .gitignore file...')
+    if File.exist?('.gitignore')
+      skip('.gitignore file already exists')
+    else
+      FileUtils.touch('.gitignore')
+      done
+    end
+  end
+
+  def initialise_git_repo
+    say('Initializing repo...')
+    if Git.initialized?
+      skip('Repo already intialized')
+    else
+      Git.init
+      done
+    end
+  end
+
+  def create_branch(name, base_branch)
+    prompt = "Create #{emphasize(name)} branch from #{emphasize(base_branch)}?"
+    if options.force? || yes?(prompt)
+      Git.create_branch(base_branch, name)
+      done
+    else
+      skip('Branch not created')
+    end
+  end
+
+  def commit_all(message)
+    say(%(The commit message will be "#{emphasize(message)}")) if message
+    prompt = "Commit all changes to the #{emphasize(Git.current_branch)} branch?"
+    if options.force? || yes?(prompt)
+      Git.commit_all(message)
+      done
+    else
+      skip('Changes not committed')
+    end
+  end
+
+  def rebase_changes(base_branch)
+    prompt = "Update the #{emphasize(base_branch)} branch and rebase?"
+    if options.force? || yes?(prompt)
+      Git.rebase(base_branch)
+      done
+    else
+      skip("No rebase off #{emphasize(base_branch)}")
+    end
+  end
+
+  def push_changes(branch)
+    say("Pushing changes on the #{emphasize(branch)} branch to remote")
+    Git.push(branch)
+    done
   end
 end
 
