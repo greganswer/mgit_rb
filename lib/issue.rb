@@ -4,25 +4,27 @@
 class Issue
   attr_accessor :id
 
-  # Create an issue from the branch name. Uses O(n) time and space.
-  def self.from_branch(name)
-    parts = name.to_s.split('-')
-    parts.each_with_index do |value, index|
-      next unless value.to_i.to_s == value
+  class << self
+    # Create an issue from the branch name. Uses O(n) time and space.
+    def from_branch(name)
+      parts = name.to_s.split('-')
+      parts.each_with_index do |value, index|
+        next unless value.to_i.to_s == value
 
-      id = parts[0..index].join('-').upcase
-      summary = parts[index + 1..-1].join(' ')
-      return new(id: id, summary: summary)
+        id = parts[0..index].join('-').upcase
+        summary = parts[index + 1..-1].join(' ')
+        return new(id: id, summary: summary)
+      end
+      new
     end
-    new
-  end
 
-  # Create an issue by making an HTTP request to the issue tracker API.
-  def self.from_tracker(issue_id)
-    puts 'TODO: Implement Issue.from_tracker'
-    id = issue_id.to_s.upcase
-    summary = 'Fake long title'
-    new(id: id, summary: summary)
+    # Create an issue by making an HTTP request to the issue tracker API.
+    def from_tracker(issue_id)
+      puts 'TODO: Implement Issue.from_tracker'
+      id = issue_id.to_s.upcase
+      summary = 'Fake long title'
+      new(id: id, summary: summary)
+    end
   end
 
   def initialize(args = {})
